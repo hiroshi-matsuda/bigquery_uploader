@@ -93,7 +93,8 @@ public class CsvUploader {
         uploader.uploadAll(new File(target), true, false, 0);
     }
     /**
-     * 例外が発生した場合は指定回数までリトライを行う。リトライ間隔は10秒。
+     * Retry until retryMax times when exception thrown while executing callable.call().
+     * The retry interval is 10 seconds.
      */
     private static <T> T autoRetry(int retryMax, Callable<T> callable) throws Exception {
         Exception lastException = null;
@@ -166,7 +167,7 @@ public class CsvUploader {
     }
     
     /**
-     * BigqueryのDatasetを準備する。
+     * Prepare Bigquery Dataset object.
      */
     public void prepareDataset() throws Exception {
         System.err.print("connecting to " + projectId + " ...");
@@ -213,14 +214,14 @@ public class CsvUploader {
     }
 
     /**
-     * 
-     * @param dir   *.schemaと*.csvを格納するディレクトリ。
-     * @param resumable trueを推奨。1M以下の短いファイルのみfalseにすることができるが、あまりメリットはない。
-     * @param useGZipContent    falseを推奨。trueを指定するとアップロード速度が極度に落ちる。
-     * @param maxBadRecords エラーを検知するために0を推奨。
+     * Upload all the tables contained in specified directory.
+     * @param dir   Upload target directory which contains *.schema and *.csv files.
+     * @param directUploadEnabled The false value recommended. You can use true for this argument whenever the sizes of each file are less than 1MB but there are very few merit.
+     * @param useGZipContent    The false value recommended. If true, the upload speed will slow down heavily.
+     * @param maxBadRecords The 0 value is recommended to detect all errors.
      */
-    public void uploadAll(final File dir, boolean resumable, boolean useGZipContent, int maxBadRecords) throws Exception {
-        System.err.println("upload target directory is " + dir + ". options: resumable=" + resumable + ", useGZipContent=" + useGZipContent + ", maxBadRecords=" + maxBadRecords);
+    public void uploadAll(final File dir, boolean directUploadEnabled, boolean useGZipContent, int maxBadRecords) throws Exception {
+        System.err.println("upload target directory is " + dir + ". options: directUploadEnabled=" + directUploadEnabled + ", useGZipContent=" + useGZipContent + ", maxBadRecords=" + maxBadRecords);
         Queue<File> queue = new LinkedList<File>();
         File[] files = dir.listFiles(new FilenameFilter() {
             @Override
@@ -241,7 +242,7 @@ public class CsvUploader {
             }
             final String tableName = matcher.group(1);
             try {
-                uploadTable(tableName, schema, resumable, useGZipContent, maxBadRecords);
+                uploadTable(tableName, schema, directUploadEnabled, useGZipContent, maxBadRecords);
             } catch (Exception e) {
                 queue.add(schema);
                 System.err.println("Exception occured and appended to retry queue:");
@@ -252,15 +253,16 @@ public class CsvUploader {
     }
 
     /**
-     * schemaファイルに対応するcsvファイルのうち、ID部が全て0もしくはIDなしのものが存在する場合のみテーブルを再作成し、それ以外は既存レコードを残してレコードを追加する。
-     * ただしBigqueryにテーブルが存在しない場合はテーブルをinsertする。
-     * @param tableName テーブル名。"${tableName}.([0-9]+.)?.csv"が読み込み対象ファイルとなる。
-     * @param schema    テーブルのスキーマを格納したcsvファイル。
-     * @param resumable trueを推奨。1M以下の短いファイルのみfalseにすることができるが、あまりメリットはない。
-     * @param useGZipContent    falseを推奨。trueを指定するとアップロード速度が極度に落ちる。
-     * @param maxBadRecords エラーを検知するために0を推奨。
+     * Read the schema csv and records csv files.
+     * If the ID field values are all 0 or missing ID field, the bigquery table will be recreated.
+     * In other cases, new records are appended to the existing bigquery table.
+     * @param tableName This argument value is used as "${tableName}.([0-9]+.)?.csv" to read the records of the table.
+     * @param schema    The schema file of the table.
+     * @param directUploadEnabled The false value recommended. You can use true for this argument whenever the sizes of each file are less than 1MB but there are very few merit.
+     * @param useGZipContent    The false value recommended. If true, the upload speed will slow down heavily.
+     * @param maxBadRecords The 0 value is recommended to detect all errors.
      */
-    public void uploadTable(final String tableName, final File schema, boolean resumable, boolean useGZipContent, int maxBadRecords) throws Exception {
+    public void uploadTable(final String tableName, final File schema, boolean directUploadEnabled, boolean useGZipContent, int maxBadRecords) throws Exception {
         System.err.print("getting table list ...");
         TableList tableList = bigquery.tables().list(projectId, datasetId).execute();
         System.err.println(" done");
@@ -284,9 +286,13 @@ public class CsvUploader {
         }
         
         final TableReference tref = insertTable(tableName, loadSchema(schema), renew || !exists);
-        uploadCsvIntoTable(dir, tableName, tref, resumable, useGZipContent, maxBadRecords);
+        uploadCsvIntoTable(dir, tableName, tref, directUploadEnabled, useGZipContent, maxBadRecords);
     }
 
+    /**
+     * Return a TableReference on bigquery repository.
+     * If create is true, the table will be inserted to the bigquery repository.
+     */
     public TableReference insertTable(String tableName, TableSchema schema, boolean create) throws Exception {
         TableReference tref = new TableReference()
             .setProjectId(projectId)
@@ -311,16 +317,16 @@ public class CsvUploader {
     }
 
     /**
-     * 一連のcsvファイルからレコードを読み込んでテーブルにinsertする。Bigqueryはレコードの追加しかできない。削除するにはテーブルの再作成が必要。
-     * @param dir   csvファイルが格納されているディレクトリ
-     * @param tableName テーブル名。Mysqldump2csv.CSV_FILE_NAME_PATTERNに合致するファイルを読み込む。
-     * @param tref  テーブル参照
-     * @param resumable trueを推奨。1M以下の短いファイルのみfalseにすることができるが、あまりメリットはない。
-     * @param useGZipContent    falseを推奨。trueを指定するとアップロード速度が極度に落ちる。
-     * @param maxBadRecords エラーを検知するために0を推奨。
-     * @throws Exception    アップロード処理のリトライが10回を超えた場合にthrowされる。
+     * Upload all the csv records contained in specified directory.
+     * @param dir   Upload target directory which contains *.schema and *.csv files.
+     * @param tableName The table name which is used for the part of Mysqldump2csv.CSV_FILE_NAME_PATTERN.
+     * @param tref  The TableReference for the bigquery table to insert.
+     * @param directUploadEnabled The false value recommended. You can use true for this argument whenever the sizes of each file are less than 1MB but there are very few merit.
+     * @param useGZipContent    The false value recommended. If true, the upload speed will slow down heavily.
+     * @param maxBadRecords The 0 value is recommended to detect all errors.
+     * @throws Exception    An IllegalStateException will be thrown when the retry exceeds 10 times.
      */
-    public void uploadCsvIntoTable(File dir, final String tableName, TableReference tref, final boolean resumable, final boolean useGZipContent, final int maxBadRecords) throws Exception {
+    public void uploadCsvIntoTable(File dir, final String tableName, TableReference tref, final boolean directUploadEnabled, final boolean useGZipContent, final int maxBadRecords) throws Exception {
         System.err.println("  upload records into " + tableName);
         JobConfigurationLoad jobLoad = new JobConfigurationLoad()
             .setDestinationTable(tref)
@@ -372,13 +378,13 @@ public class CsvUploader {
                     }
                     try {
                         InputStreamContent mediaContent = new InputStreamContent("application/octet-stream", in);
-                        // GCPライブラリの制限でresumableが有効な場合にコンテントの長さをセットするとgzipが無効になる。
-                        if (!resumable || !useGZipContent) {
+                        // GCPライブラリの制限でdirectUploadEnabledが有効な場合にコンテントの長さをセットするとgzipが無効になる。
+                        if (directUploadEnabled || !useGZipContent) {
                             mediaContent.setLength(csv.length());
                         }
                         Insert insert = bigquery.jobs().insert(projectId, outputJob, mediaContent);
                         insert.getMediaHttpUploader()
-                            .setDirectUploadEnabled(!resumable)
+                            .setDirectUploadEnabled(directUploadEnabled)
                             .setDisableGZipContent(!useGZipContent)
                             .setProgressListener(ua);
                         JobStatus status = insert.execute().getStatus();
