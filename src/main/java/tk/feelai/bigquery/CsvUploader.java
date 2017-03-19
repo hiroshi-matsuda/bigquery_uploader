@@ -43,6 +43,9 @@ import com.google.api.services.bigquery.model.TableReference;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.api.services.bigquery.BigqueryScopes;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.File;
@@ -63,6 +66,8 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipInputStream;
 
 public class CsvUploader {
+
+    final Logger logger = LoggerFactory.getLogger(CsvUploader.class);
 
     private static void usage() {
         System.err.println("Usage:");
@@ -85,10 +90,11 @@ public class CsvUploader {
                 Mysqldump2csv.main(dumpArgs);
             }
         }
+        final Logger logger = LoggerFactory.getLogger(CsvUploader.class); // for static context should not be shared
         CsvUploader uploader = new CsvUploader();
-        System.err.print("authorizing ...");
+        logger.debug("authorizing ...");
         uploader.authorize(args[0], args[1], args[2], new File(args[3]));
-        System.err.println(" done");
+        logger.debug(" done");
         uploader.prepareDataset();
         uploader.uploadAll(new File(target), true, false, 0);
     }
@@ -97,17 +103,18 @@ public class CsvUploader {
      * The retry interval is 10 seconds.
      */
     private static <T> T autoRetry(int retryMax, Callable<T> callable) throws Exception {
+        final Logger logger = LoggerFactory.getLogger(CsvUploader.class); // for static context should not be shared
         Exception lastException = null;
         for (int a = 0; a <= retryMax; a++) {
             try {
                 return callable.call();
             } catch (Exception e) {
                 lastException = e;
-                System.err.println(e);
+                logger.error(e.toString());
             }
             if (a < retryMax) {
                 try {
-                    System.err.println("auto-retry in 10 seconds");
+                    logger.warn("auto-retry in 10 seconds");
                     Thread.sleep(10000);
                 } catch (Exception e) {
                 }
@@ -170,13 +177,13 @@ public class CsvUploader {
      * Prepare Bigquery Dataset object.
      */
     public void prepareDataset() throws Exception {
-        System.err.print("connecting to " + projectId + " ...");
+        logger.debug("connecting to {}", projectId);
         bigquery = new Bigquery.Builder(httpTransport, JSON_FACTORY, credential).setApplicationName("tk.feelai.bigquery.CsvUploader").build();
-        System.err.println(" done");
+        logger.debug(" done");
 
-        System.err.print("getting dataset list ...");
+        logger.debug("getting dataset list ...");
         DatasetList datasetList = bigquery.datasets().list(projectId).execute();
-        System.err.println(" done");
+        logger.debug(" done");
         try {
             for (Datasets d : datasetList.getDatasets()) {
                 if (String.format("%s:%s", projectId, datasetId).equals(d.getId())) {
@@ -192,7 +199,7 @@ public class CsvUploader {
         } catch (NullPointerException e) {
         }
         if (dataset == null) {
-            System.err.print("creating " + datasetId + " ...");
+            logger.debug("creating {}", datasetId);
             DatasetReference datasetRef = new DatasetReference()
                 .setProjectId(projectId)
                 .setDatasetId(datasetId);
@@ -204,13 +211,13 @@ public class CsvUploader {
                     return bigquery.datasets().insert(projectId, outputDataset).execute();        
                 }
             });
-            System.err.println(" done");
+            logger.debug(" done");
         } else {
-            System.err.println("attached to " + datasetId);
+            logger.debug("attached to {}", datasetId);
         }
         JobList jobList = bigquery.jobs().list(projectId).execute();
-        System.err.println("recent job list is below:");
-        System.err.println(jobList.getJobs());
+        logger.debug("recent job list is below:");
+        logger.debug(jobList.getJobs().toString());
     }
 
     /**
@@ -221,7 +228,11 @@ public class CsvUploader {
      * @param maxBadRecords The 0 value is recommended to detect all errors.
      */
     public void uploadAll(final File dir, boolean directUploadEnabled, boolean useGZipContent, int maxBadRecords) throws Exception {
-        System.err.println("upload target directory is " + dir + ". options: directUploadEnabled=" + directUploadEnabled + ", useGZipContent=" + useGZipContent + ", maxBadRecords=" + maxBadRecords);
+        logger.debug("upload target directory is {}. options: directUploadEnabled={}, useGZipContent={}, maxBadRecords={}",
+                dir,
+                directUploadEnabled,
+                useGZipContent,
+                maxBadRecords);
         Queue<File> queue = new LinkedList<File>();
         File[] files = dir.listFiles(new FilenameFilter() {
             @Override
@@ -245,11 +256,10 @@ public class CsvUploader {
                 uploadTable(tableName, schema, directUploadEnabled, useGZipContent, maxBadRecords);
             } catch (Exception e) {
                 queue.add(schema);
-                System.err.println("Exception occured and appended to retry queue:");
-                e.printStackTrace(System.err);
+                logger.error("Exception occured and appended to retry queue", e);
             }
         }
-        System.err.println("upload completed in " + dir);
+        logger.debug("upload completed in " + dir);
     }
 
     /**
@@ -263,9 +273,9 @@ public class CsvUploader {
      * @param maxBadRecords The 0 value is recommended to detect all errors.
      */
     public void uploadTable(final String tableName, final File schema, boolean directUploadEnabled, boolean useGZipContent, int maxBadRecords) throws Exception {
-        System.err.print("getting table list ...");
+        logger.debug("getting table list ...");
         TableList tableList = bigquery.tables().list(projectId, datasetId).execute();
-        System.err.println(" done");
+        logger.debug(" done");
 
         File dir = schema.getParentFile();
         boolean renew = Mysqldump2csv.firstCsvExists(dir, tableName), exists = false;
@@ -274,15 +284,15 @@ public class CsvUploader {
                 if (String.format("%s:%s.%s", projectId, datasetId, tableName).equals(t.getId())) {
                     exists = true;
                     if (renew) {
-                        System.err.print("deleting " + tableName + " table ...");
+                        logger.debug("deleting " + tableName + " table ...");
                         bigquery.tables().delete(projectId, datasetId, tableName).execute();
-                        System.err.println(" done");
+                        logger.debug(" done");
                     }
                     break;
                 }
             }
         } catch (NullPointerException e) {
-            System.err.println("  NullPointerException ignored");
+            logger.debug("  NullPointerException ignored");
         }
         
         final TableReference tref = insertTable(tableName, loadSchema(schema), renew || !exists);
@@ -301,7 +311,7 @@ public class CsvUploader {
         if (!create) {
             return tref;
         }
-        System.err.print("inserting " + tableName + " table ...");
+        logger.debug("inserting {} table ...", tableName);
         final Table table = new Table()
             .setSchema(schema)
             .setTableReference(tref);
@@ -312,7 +322,7 @@ public class CsvUploader {
                 return null;
             }
         });
-        System.err.println(" done");
+        logger.debug(" done");
         return tref;
     }
 
@@ -327,7 +337,7 @@ public class CsvUploader {
      * @throws Exception    An IllegalStateException will be thrown when the retry exceeds 10 times.
      */
     public void uploadCsvIntoTable(File dir, final String tableName, TableReference tref, final boolean directUploadEnabled, final boolean useGZipContent, final int maxBadRecords) throws Exception {
-        System.err.println("  upload records into " + tableName);
+        logger.debug("  upload records into {}", tableName);
         JobConfigurationLoad jobLoad = new JobConfigurationLoad()
             .setDestinationTable(tref)
             .setCreateDisposition("CREATE_NEVER")
@@ -350,21 +360,21 @@ public class CsvUploader {
             }
         });
         if (csvs.length == 0) {
-            System.err.println("  no record found in " + tableName);
+            logger.warn("  no record found in {}", tableName);
         }
         Arrays.sort(csvs);
         long totalSize = 0;
         for (File csv : csvs) {
             totalSize += csv.length();
         }
-        System.err.println(String.format("  total %d files, %,3dkB", csvs.length, totalSize / 1000));
+        logger.debug(String.format("  total %d files, %,3dkB", csvs.length, totalSize / 1000));
 
         final UploadAdaptor ua = new UploadAdaptor(totalSize);
         for (final File csv : csvs) {
             autoRetry(10, new Callable<Void>() {
                 @Override
                 public Void call() throws Exception {
-                    System.err.print(String.format("  target=" + csv + " ."));
+                    logger.debug("  target={}.", csv);
                     Matcher matcher = fileNamePattern.matcher(csv.getName());
                     if (!matcher.matches()) {
                         throw new IllegalStateException();
@@ -402,7 +412,7 @@ public class CsvUploader {
         }
     }
     
-    private static class UploadAdaptor implements MediaHttpUploaderProgressListener {
+    private class UploadAdaptor implements MediaHttpUploaderProgressListener {
         final long totalSize;
         long uploadedSize, prev, prevSize;
         UploadAdaptor(long totalSize) {
@@ -411,27 +421,25 @@ public class CsvUploader {
         public void progressChanged(MediaHttpUploader uploader) throws IOException {
             switch (uploader.getUploadState()) {
             case INITIATION_STARTED:
-                System.err.print(".");
+                logger.debug("INITIATION_STARTED");
                 prev = System.currentTimeMillis();
                 prevSize = 0;
                 break;
             case INITIATION_COMPLETE:
-                System.err.print(".");
+                logger.debug("INITIATION_COMPLETE");
                 break;
             case MEDIA_IN_PROGRESS:
                 long now = System.currentTimeMillis();
                 if (now - prev >= 60000) {
                     long size = uploader.getNumBytesUploaded();
-                    System.err.println();
-                    System.err.print(String.format("    %,3dkB, %.2f%% (%,3dkB/sec), " + new Date(now) + " .", (uploadedSize + size) / 1000, (uploadedSize + size) * 100f / totalSize, (size - prevSize) / (now - prev)));
+                    logger.debug("MEDIA_IN_PROGRESS");
+                    logger.debug(String.format("    %,3dkB, %.2f%% (%,3dkB/sec), " + new Date(now) + " .", (uploadedSize + size) / 1000, (uploadedSize + size) * 100f / totalSize, (size - prevSize) / (now - prev)));
                     prev = now;
                     prevSize = size;
-                } else {
-                    System.err.print(".");
                 }
                 break;
             case MEDIA_COMPLETE:
-                System.err.println();
+                logger.debug("MEDIA_COMPLETE");
                 break;
             case NOT_STARTED:
                 throw new IllegalStateException("upload not started");

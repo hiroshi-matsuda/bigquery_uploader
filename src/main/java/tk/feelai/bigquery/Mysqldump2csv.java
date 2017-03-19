@@ -14,6 +14,9 @@ package tk.feelai.bigquery;
  * the License.
  */
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -30,6 +33,8 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 public class Mysqldump2csv {
+
+    final Logger logger = LoggerFactory.getLogger(Mysqldump2csv.class);
 
     private static void usage() {
         System.err.println("Usage:");
@@ -128,10 +133,10 @@ public class Mysqldump2csv {
         PrintWriter out;
         if (skip(tableName)) {
             out = DummyWriter.create();
-            System.err.println("skipping schema: " + tableName + " (" + new Date() + ")");
+            logger.debug("skipping schema: {}", tableName);
         } else {
             out = new PrintWriter(new File(outDir, String.format(SCHEMA_FILE_NAME_FORMAT, tableName)));
-            System.err.println("retrieving schema: " + tableName + " (" + new Date() + ")");
+            logger.debug("retrieving schema: {}", tableName);
         }
         try {
             String line;
@@ -291,12 +296,12 @@ public class Mysqldump2csv {
             outRecords = DummyWriter.create();
             if (!tableName.equals(prevTableName)) {
                 prevTableName = tableName;
-                System.err.println("skipping records: " + tableName + " (" + new Date() + ")");
+                logger.debug("skipping records: {}", tableName);
             }
         } else {
             if (!tableName.equals(prevTableName)) {
                 prevTableName = tableName;
-                System.err.println("retrieving records: " + tableName + " (" + new Date() + ")");
+                logger.debug("retrieving records: {}");
             }
             File file = new File(outDir, String.format(CSV_FILE_NAME_FORMAT, tableName, outIndex, useZip ? ".zip" : ""));
             if (useZip) {

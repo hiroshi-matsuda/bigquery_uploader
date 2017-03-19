@@ -25,7 +25,7 @@
         <module name="bigquery_uploader" />
       </profile>
     </annotationProcessing>
-    <bytecodeTargetLevel>
+    <bytecodeTargetLevel target="1.8">
       <module name="bigquery_uploader" target="1.8" />
     </bytecodeTargetLevel>
   </component>

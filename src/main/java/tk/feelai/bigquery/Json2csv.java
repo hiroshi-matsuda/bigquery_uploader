@@ -31,6 +31,7 @@ import net.arnx.jsonic.JSONException;
 import net.arnx.jsonic.JSONReader;
 
 public class Json2csv {
+
     public static void usage() {
         System.err.println("java tk.feelai.bigquery.Json2csv [--root node_pattern_path] [--nest N] [--client_ip_only] [--encoding ENCODING] [json1 [json2 [...]]]");
         System.err.println("  Each json file should contain an array object which has same type elements.");
@@ -40,6 +41,7 @@ public class Json2csv {
         System.err.println("  Please specify --client-ip-only option if you need to remove previousLoadBalancerIPAddress. (default=disabled)");
         System.err.println("  Please specify --encoding option if you need to change input and output encodings. (default=UTF-8)");
     }
+
     public static void main(String[] args) throws IOException, JSONException {
         List<Pattern> rootPath = new ArrayList<Pattern>();
         rootPath.add(Pattern.compile(""));
@@ -95,6 +97,7 @@ public class Json2csv {
             usage();
         }
     }
+
     public static void conv(List<Pattern> rootPath, Pattern fieldFilter, int nestLevel, boolean clientIPOnly, Reader in, PrintWriter out) throws IOException, JSONException {
         JSONReader reader = new JSON().getReader(in);
         JSONEventType type;
@@ -181,6 +184,7 @@ public class Json2csv {
             }
         }
     }
+
     public static boolean isInTarget(List<Pattern> rootPath, List<String> path, int depth) {
         if (depth < rootPath.size()) {
             return false;
@@ -193,6 +197,7 @@ public class Json2csv {
         }
         return true;
     }
+
     public static boolean isTargetField(List<String> path, int depth, Pattern fieldFilter) {
         Matcher m = fieldFilter.matcher(path.get(depth));
         return m.matches();
